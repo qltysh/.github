@@ -29,8 +29,8 @@ Then you can initialize your repository for linting and auto-formatting:
 cd my_repo/
 qlty init
 
-qlty check --sample=5 # View a sample of lint issues
-qlty fmt --all        # Auto-format the whole repo
+qlty check --sample=5   # View a sample of lint issues
+qlty fmt --all          # Auto-format the whole repo
 ```
 
 To receive code quality feedback on your GitHub pull requests, [sign up for a Qlty Cloud account](https://qlty.sh), install our GitHub Application, and you will be up and running in minutes.
