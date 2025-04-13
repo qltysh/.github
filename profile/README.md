@@ -1,25 +1,40 @@
 ![Header](header.png?raw=true)
 
-## What is Qlty?
+## Code quality and coverage done right
 
-Qlty is a Code Health Platform from the makers of Code Climate that helps teams continuously improve their code quality with:
+Qlty Software provides a multi-language code quality tool for linting, auto-formatting, maintainability, and security with support for 70+ static analysis tools for 40+ languages and technologies.
 
-- 💩 Code smells
-- 📋 Duplication
-- 🐞 Linting
-- 🔒 Security
-- 🖌 Auto-formatting
-- 📊 Metrics
-- 🚦 Test coverage
+The Qlty CLI is **completely free for all use**, including for commercial projects, with no limits on contributors.
 
-## Get started
+We also offer Qlty Cloud, an code health platform that provides automated code review and quality trends, including code coverage reporting.
 
-```sh
-curl https://qlty.sh | bash
+💡 Learn more in the [Documentation](https://docs.qlty.sh/).
+
+## 🚀 Get Started
+
+The fastest way to install Qlty CLI is using our installer scripts which install our native binaries:
+
+```bash
+# Install on MacOS or Linux
+curl https://qlty.sh | bash 
+
+
+# Install on Windows
+powershell -c "iwr https://qlty.sh | iex"
 ```
 
-[Sign up for a Qlty account](https://qlty.sh), install our GitHub Application, and you will be up and running in minutes.
+Then you can initialize your repository for linting and auto-formatting:
 
-## Help and feedback
+```bash
+cd my_repo/
+qlty init
+
+qlty check --sample=5 # View a sample of lint issues
+qlty fmt --all        # Auto-format the whole repo
+```
+
+To receive code quality feedback on your GitHub pull requests, [sign up for a Qlty Cloud account](https://qlty.sh), install our GitHub Application, and you will be up and running in minutes.
+
+## 🛟 Help or Feedback
 
 Join the our [Discord](https://qlty.sh/discord) for help and to provide feedback that we'll use to improve Qlty.
