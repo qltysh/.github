@@ -6,7 +6,7 @@ Qlty Software provides a multi-language code quality tool for linting, auto-form
 
 The Qlty CLI is **completely free for all use**, including for commercial projects, with no limits on contributors.
 
-We also offer Qlty Cloud, an code health platform that provides automated code review and quality trends, including code coverage reporting.
+We also offer Qlty Cloud, a code health platform that provides automated code review and quality trends, including code coverage reporting.
 
 💡 Learn more in the [Documentation](https://docs.qlty.sh/).
 
@@ -37,4 +37,4 @@ To receive code quality feedback on your GitHub pull requests, [sign up for a Ql
 
 ## 🛟 Help or Feedback
 
-Join the our [Discord](https://qlty.sh/discord) for help and to provide feedback that we'll use to improve Qlty.
+Join our [Discord](https://qlty.sh/discord) for help and to provide feedback that we'll use to improve Qlty.
