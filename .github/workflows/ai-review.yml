@@ -1,0 +1,229 @@
+# Reusable AI review. Each repo calls this from a small workflow; see ai-review/README.md.
+#
+# One job decides what the event calls for. A PR marked ready, opened, reopened or pushed while ready gets a review.
+# A maintainer's `/ai-review` comment gets one too, even on a draft or a fork PR. Review comments and submitted
+# reviews only recompute the gate. Drafts, and PRs from outside contributors, get no automatic review.
+name: AI review
+
+on:
+  workflow_call:
+    inputs:
+      mode:
+        description: "advisory (never blocks) or blocking (open important findings fail the ai-review status)"
+        type: string
+        default: advisory
+      public:
+        description: "The repo is public: findings stay within what the PR changes and within this repo"
+        type: boolean
+        default: false
+      context-file:
+        description: "Repo-specific review instructions, read from the base branch"
+        type: string
+        default: .github/ai-review.md
+      context-repos:
+        description: "Comma-separated repo names in this org the review may also read, at their default branch. Needs context-app-id and context-app-private-key."
+        type: string
+        default: ""
+      context-app-id:
+        description: "GitHub App that can read context-repos. The workflow mints a read-only token for just those repos."
+        type: string
+        default: ""
+      engine-ref:
+        description: "Ref of qltysh/.github to run the engine from. Match the ref in `uses:`."
+        type: string
+        default: main
+      runs-on:
+        type: string
+        default: ubuntu-latest
+    secrets:
+      anthropic-api-key:
+        description: "Claude API key from a Console workspace with a spend limit. Without it, reviews are skipped."
+        required: false
+      slack-webhook-url:
+        description: "Incoming webhook that hears about skipped reviews"
+        required: false
+      context-app-private-key:
+        description: "Private key of context-app-id"
+        required: false
+
+permissions: {}
+
+env:
+  CLAUDE_CODE_VERSION: 2.1.308
+  CLAUDE_CODE_SHA256_LINUX_X64: 356733f185fa988e6bf3aa9a555269fdd167982a2e2a80d3c8a78037bb92ad58
+  CLAUDE_CODE_SHA256_LINUX_ARM64: fdd22e6cbb734d580f5664c48df4294eeec850218ff07f186f9af30426396ee1
+
+jobs:
+  route:
+    runs-on: ubuntu-latest
+    outputs:
+      action: ${{ steps.route.outputs.action }}
+      pr: ${{ steps.route.outputs.pr }}
+      trigger: ${{ steps.route.outputs.trigger }}
+    steps:
+      - id: route
+        env:
+          EVENT: ${{ github.event_name }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+          DRAFT: ${{ github.event.pull_request.draft }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          AUTHOR_ASSOCIATION: ${{ github.event.pull_request.author_association }}
+          IS_PR_COMMENT: ${{ github.event.issue.pull_request != null }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          COMMENTER_ASSOCIATION: ${{ github.event.comment.author_association }}
+        run: |
+          trusted() { case "$1" in OWNER|MEMBER|COLLABORATOR) return 0;; *) return 1;; esac; }
+          action=none
+          trigger=auto
+          case "$EVENT" in
+            pull_request)
+              if [ "$DRAFT" = "true" ]; then
+                echo "Draft PR: no automatic review."
+              elif [ "$HEAD_REPO" != "$REPO" ] || ! trusted "$AUTHOR_ASSOCIATION"; then
+                echo "Outside contributor: no automatic review. A maintainer can comment /ai-review."
+              else
+                action=review
+              fi
+              ;;
+            issue_comment)
+              if [ "$IS_PR_COMMENT" = "true" ] && [[ "$COMMENT_BODY" == /ai-review* ]] && trusted "$COMMENTER_ASSOCIATION"; then
+                action=review
+                trigger=manual
+              fi
+              ;;
+            pull_request_review|pull_request_review_comment)
+              # Fork PRs get a read-only token here; their follow-up status job recomputes the gate instead.
+              if [ "$HEAD_REPO" = "$REPO" ]; then action=gate; fi
+              ;;
+          esac
+          {
+            echo "action=$action"
+            echo "pr=$PR_NUMBER"
+            echo "trigger=$trigger"
+          } >> "$GITHUB_OUTPUT"
+          echo "AI review: $action ($EVENT)"
+
+  review:
+    needs: route
+    if: needs.route.outputs.action == 'review'
+    runs-on: ${{ inputs.runs-on }}
+    # Two attempts of two calls, each capped at 10 minutes, plus setup.
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      pull-requests: write
+      statuses: write
+    concurrency:
+      group: ai-review-${{ github.repository }}-${{ needs.route.outputs.pr }}
+      cancel-in-progress: true
+    steps:
+      - name: Check out the review engine
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          repository: qltysh/.github
+          ref: ${{ inputs.engine-ref }}
+          path: engine
+          persist-credentials: false
+
+      - name: Check out the pull request
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: refs/pull/${{ needs.route.outputs.pr }}/head
+          path: repo
+          fetch-depth: 0
+          filter: blob:none
+          # The model reads this checkout. No token may be stored in it.
+          persist-credentials: false
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2
+        with:
+          bun-version: 1.4.4
+
+      - name: Install Claude Code
+        run: |
+          case "$(uname -m)" in
+            x86_64) platform=linux-x64; sha="$CLAUDE_CODE_SHA256_LINUX_X64" ;;
+            aarch64) platform=linux-arm64; sha="$CLAUDE_CODE_SHA256_LINUX_ARM64" ;;
+            *) echo "Unsupported runner architecture $(uname -m)"; exit 1 ;;
+          esac
+          curl -fsSL --retry 3 -o claude \
+            "https://downloads.claude.ai/claude-code-releases/${CLAUDE_CODE_VERSION}/${platform}/claude"
+          # Checked against a hash pinned in this file, not one fetched from the same server.
+          echo "${sha}  claude" | sha256sum -c -
+          mkdir -p "$HOME/.local/bin"
+          install -m 0755 claude "$HOME/.local/bin/claude"
+          rm claude
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Mint a token for the context repos
+        id: context-token
+        if: inputs.context-repos != '' && !inputs.public
+        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
+        with:
+          app-id: ${{ inputs.context-app-id }}
+          private-key: ${{ secrets.context-app-private-key }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ inputs.context-repos }}
+          permission-contents: read
+
+      - name: Fetch context repos
+        if: inputs.context-repos != '' && !inputs.public
+        env:
+          OWNER: ${{ github.repository_owner }}
+          CONTEXT_REPOS: ${{ inputs.context-repos }}
+          CONTEXT_TOKEN: ${{ steps.context-token.outputs.token }}
+        run: |
+          header="Authorization: basic $(printf 'x-access-token:%s' "$CONTEXT_TOKEN" | base64 -w0)"
+          dirs=""
+          for repo in ${CONTEXT_REPOS//,/ }; do
+            dest="$GITHUB_WORKSPACE/context/$repo"
+            # The header is passed per command, so no token lands on disk; .git goes too, for good measure.
+            git -c http.extraHeader="$header" clone -q --depth 1 "https://github.com/$OWNER/${repo}.git" "$dest"
+            rm -rf "$dest/.git"
+            dirs="${dirs:+$dirs:}$dest"
+          done
+          echo "AI_REVIEW_EXTRA_DIRS=$dirs" >> "$GITHUB_ENV"
+
+      - name: Review
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          ANTHROPIC_API_KEY: ${{ secrets.anthropic-api-key }}
+          AI_REVIEW_SLACK_WEBHOOK_URL: ${{ secrets.slack-webhook-url }}
+          AI_REVIEW_PR: ${{ needs.route.outputs.pr }}
+          AI_REVIEW_TRIGGER: ${{ needs.route.outputs.trigger }}
+          AI_REVIEW_MODE: ${{ inputs.mode }}
+          AI_REVIEW_PUBLIC: ${{ inputs.public }}
+          AI_REVIEW_CONTEXT_FILE: ${{ inputs.context-file }}
+          AI_REVIEW_REPO_DIR: ${{ github.workspace }}/repo
+        run: bun engine/ai-review/src/cli.ts review
+
+  gate:
+    needs: route
+    if: needs.route.outputs.action == 'gate'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      pull-requests: read
+      statuses: write
+    steps:
+      - name: Check out the review engine
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          repository: qltysh/.github
+          ref: ${{ inputs.engine-ref }}
+          path: engine
+          persist-credentials: false
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2
+        with:
+          bun-version: 1.4.4
+
+      - name: Recompute the ai-review status
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          AI_REVIEW_PR: ${{ needs.route.outputs.pr }}
+          AI_REVIEW_MODE: ${{ inputs.mode }}
+        run: bun engine/ai-review/src/cli.ts gate
