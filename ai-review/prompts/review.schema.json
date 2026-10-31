@@ -1,0 +1,37 @@
+{
+  "type": "object",
+  "required": ["findings", "prior"],
+  "properties": {
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["severity", "category", "file", "message"],
+        "properties": {
+          "severity": { "enum": ["important", "nit"] },
+          "category": {
+            "enum": ["bug", "security", "operational", "design", "missing-test", "rule", "clarity", "copy"]
+          },
+          "file": { "type": "string" },
+          "line": { "type": "integer" },
+          "startLine": { "type": "integer" },
+          "rule": { "type": "string" },
+          "suggestion": { "type": "string" },
+          "message": { "type": "string" }
+        }
+      }
+    },
+    "prior": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "status"],
+        "properties": {
+          "id": { "type": "string" },
+          "status": { "enum": ["fixed", "answered", "open"] },
+          "reply": { "type": "string" }
+        }
+      }
+    }
+  }
+}

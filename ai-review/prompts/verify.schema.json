@@ -1,0 +1,19 @@
+{
+  "type": "object",
+  "required": ["decisions"],
+  "properties": {
+    "decisions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["index", "keep", "reason"],
+        "properties": {
+          "index": { "type": "integer" },
+          "keep": { "type": "boolean" },
+          "severity": { "enum": ["important", "nit"] },
+          "reason": { "type": "string" }
+        }
+      }
+    }
+  }
+}
