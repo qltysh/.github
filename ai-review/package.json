@@ -1,0 +1,16 @@
+{
+  "name": "@qltysh/ai-review",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "license": "UNLICENSED",
+  "scripts": {
+    "check": "tsc --noEmit && biome check . && bun test",
+    "test": "bun test"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.0.5",
+    "@types/bun": "1.2.20",
+    "typescript": "5.9.2"
+  }
+}
