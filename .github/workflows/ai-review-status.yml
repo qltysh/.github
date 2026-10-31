@@ -1,0 +1,47 @@
+# Reusable follow-up for public repos. Workflows on fork PRs get a read-only token, so they can't set a status. This
+# runs after each "AI review" run, from the default branch with a write token, and sets the ai-review status for a
+# fork PR: the gate's result, or a note that no review ran so the PR isn't stuck waiting. It reads the PR only
+# through the API and never checks out its code.
+name: AI review status
+
+on:
+  workflow_call:
+    inputs:
+      mode:
+        description: "Must match the mode the repo's AI review workflow uses"
+        type: string
+        default: advisory
+      engine-ref:
+        type: string
+        default: main
+
+permissions: {}
+
+jobs:
+  status:
+    if: github.event.workflow_run.head_repository.full_name != github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      pull-requests: read
+      statuses: write
+    steps:
+      - name: Check out the review engine
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          repository: qltysh/.github
+          ref: ${{ inputs.engine-ref }}
+          path: engine
+          persist-credentials: false
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2
+        with:
+          bun-version: 1.4.4
+
+      - name: Set the ai-review status
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          AI_REVIEW_SHA: ${{ github.event.workflow_run.head_sha }}
+          AI_REVIEW_MODE: ${{ inputs.mode }}
+        run: bun engine/ai-review/src/cli.ts gate-sha
