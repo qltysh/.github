@@ -103,7 +103,9 @@ export function redact(text: string, secrets: string[] = []): string {
 }
 
 const knownSecrets = () =>
-  ["GITHUB_TOKEN", "ANTHROPIC_API_KEY", "AI_REVIEW_SLACK_WEBHOOK_URL"].flatMap((k) => process.env[k] ?? []);
+  ["GITHUB_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "AI_REVIEW_SLACK_WEBHOOK_URL"].flatMap(
+    (k) => process.env[k] ?? [],
+  );
 
 /** Replies to and resolves the bot's earlier findings. The bot resolving a thread is what tells the gate it's done. */
 export async function applyPriorUpdates(
@@ -172,7 +174,9 @@ async function ciReview() {
   if (pull.draft && process.env.AI_REVIEW_TRIGGER !== "manual") return console.log("Draft PR; no automatic review.");
 
   const sha = pull.head.sha;
-  if (!process.env.ANTHROPIC_API_KEY) return await skip(gh, number, sha, cfg, "no Anthropic API key is configured");
+  if (!process.env.ANTHROPIC_API_KEY && !process.env.ANTHROPIC_AUTH_TOKEN) {
+    return await skip(gh, number, sha, cfg, "no Claude API credentials were available");
+  }
   await gh.setStatus(sha, "pending", "AI review in progress", runUrl());
   // From here on, every path sets a final status, so the check never stays pending.
   try {

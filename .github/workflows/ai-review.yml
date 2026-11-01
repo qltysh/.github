@@ -35,9 +35,25 @@ on:
       runs-on:
         type: string
         default: ubuntu-latest
+      anthropic-federation-rule-id:
+        description: "Claude Console federation rule (fdrl_...) that trades this run's GitHub identity token for a short-lived Claude API token. Preferred over anthropic-api-key; the caller needs id-token: write."
+        type: string
+        default: ""
+      anthropic-organization-id:
+        description: "Claude Console organization ID, for federation"
+        type: string
+        default: ""
+      anthropic-service-account-id:
+        description: "Claude Console service account (svac_...) the token acts as, for federation"
+        type: string
+        default: ""
+      anthropic-workspace-id:
+        description: "Claude Console workspace (wrkspc_...) the token bills to, for federation"
+        type: string
+        default: ""
     secrets:
       anthropic-api-key:
-        description: "Claude API key from a Console workspace with a spend limit. Without it, reviews are skipped."
+        description: "Claude API key, used only when no federation rule is set. Without either, reviews are skipped."
         required: false
       slack-webhook-url:
         description: "Incoming webhook that hears about skipped reviews"
@@ -114,6 +130,8 @@ jobs:
       contents: read
       pull-requests: write
       statuses: write
+      # Lets the job request a GitHub identity token to trade for a Claude API token.
+      id-token: write
     concurrency:
       group: ai-review-${{ github.repository }}-${{ needs.route.outputs.pr }}
       cancel-in-progress: true
@@ -185,6 +203,45 @@ jobs:
             dirs="${dirs:+$dirs:}$dest"
           done
           echo "AI_REVIEW_EXTRA_DIRS=$dirs" >> "$GITHUB_ENV"
+
+      - name: Get a short-lived Claude API token
+        if: inputs.anthropic-federation-rule-id != ''
+        env:
+          RULE_ID: ${{ inputs.anthropic-federation-rule-id }}
+          ORGANIZATION_ID: ${{ inputs.anthropic-organization-id }}
+          SERVICE_ACCOUNT_ID: ${{ inputs.anthropic-service-account-id }}
+          WORKSPACE_ID: ${{ inputs.anthropic-workspace-id }}
+        run: |
+          # A failed exchange leaves no token, and the review is then skipped with a comment, never left pending.
+          if [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
+            echo "::warning::No GitHub identity token available. The calling job needs permissions: id-token: write."
+            exit 0
+          fi
+          identity=$(curl -fsS --retry 2 -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=https://api.anthropic.com" | jq -r .value) || identity=""
+          if [ -z "$identity" ] || [ "$identity" = null ]; then
+            echo "::warning::Couldn't get a GitHub identity token."
+            exit 0
+          fi
+          echo "::add-mask::$identity"
+          body=$(jq -n --arg assertion "$identity" --arg rule "$RULE_ID" --arg org "$ORGANIZATION_ID" \
+            --arg account "$SERVICE_ACCOUNT_ID" --arg workspace "$WORKSPACE_ID" '{
+              grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer", assertion: $assertion,
+              federation_rule_id: $rule, organization_id: $org
+            } + (if $account != "" then {service_account_id: $account} else {} end)
+              + (if $workspace != "" then {workspace_id: $workspace} else {} end)')
+          status=$(curl -sS --retry 2 -o exchange.json -w '%{http_code}' -X POST https://api.anthropic.com/v1/oauth/token \
+            -H 'content-type: application/json' --data-binary "$body") || status=000
+          token=$(jq -r '.access_token // empty' exchange.json 2>/dev/null || true)
+          rm -f exchange.json
+          if [ "$status" != 200 ] || [ -z "$token" ]; then
+            # The response body isn't printed: a 401 is opaque anyway, and the deny reason is in the Console's
+            # authentication history.
+            echo "::warning::Claude token exchange failed (HTTP $status). Check the federation rule in the Claude Console."
+            exit 0
+          fi
+          echo "::add-mask::$token"
+          echo "ANTHROPIC_AUTH_TOKEN=$token" >> "$GITHUB_ENV"
 
       - name: Review
         env:

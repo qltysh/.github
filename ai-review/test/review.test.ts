@@ -214,3 +214,10 @@ describe("claudeEnv", () => {
     ).toEqual({ PATH: "/bin", HOME: "/h", ANTHROPIC_API_KEY: "k" });
   });
 });
+
+describe("claudeEnv, credentials", () => {
+  test("passes a federated token and drops an empty API key, so Claude Code doesn't try an empty key", async () => {
+    const { claudeEnv } = await import("../src/claude.ts");
+    expect(claudeEnv({ ANTHROPIC_API_KEY: "", ANTHROPIC_AUTH_TOKEN: "t" })).toEqual({ ANTHROPIC_AUTH_TOKEN: "t" });
+  });
+});

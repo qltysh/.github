@@ -45,7 +45,9 @@ const PASSED_ENV = /^(PATH|HOME|USER|LANG|LC_\w+|TMPDIR|TERM|ANTHROPIC_\w+|CLAUD
 
 export function claudeEnv(source: Record<string, string | undefined>): Record<string, string> {
   return Object.fromEntries(
-    Object.entries(source).filter((e): e is [string, string] => PASSED_ENV.test(e[0]) && e[1] !== undefined),
+    Object.entries(source).filter(
+      (e): e is [string, string] => PASSED_ENV.test(e[0]) && e[1] !== undefined && e[1] !== "",
+    ),
   );
 }
 

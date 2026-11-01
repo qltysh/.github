@@ -15,6 +15,17 @@ The prompt, the rules for what blocks, and the code live here, so a change appli
 
 Findings about files a PR doesn't change go in the summary and don't block, since they can't take an inline thread.
 
+## Claude API access
+
+The review authenticates with identity federation, so no Claude API key is stored in GitHub. Each run trades its GitHub identity token for a Claude API token that expires within the hour. One-time setup in the Claude Console:
+
+1. A workspace named "AI Code Review", with a monthly spend limit. Usage and cost show per workspace.
+2. A service account in that workspace.
+3. A federation rule for GitHub Actions: issuer `https://token.actions.githubusercontent.com`, audience `https://api.anthropic.com`, targeting that service account and workspace, and allowing only tokens whose `repository_owner` is `qltysh` and whose `job_workflow_ref` is `qltysh/.github/.github/workflows/ai-review.yml@refs/heads/main`. Then only this workflow, from this repo's protected main, can get a token.
+4. Org Actions variables (they aren't secrets): `AI_CODE_REVIEW_ANTHROPIC_FEDERATION_RULE_ID`, `AI_CODE_REVIEW_ANTHROPIC_ORGANIZATION_ID`, `AI_CODE_REVIEW_ANTHROPIC_SERVICE_ACCOUNT_ID`, `AI_CODE_REVIEW_ANTHROPIC_WORKSPACE_ID`.
+
+A repo that can't use federation can pass an API key as the `anthropic-api-key` secret instead, for example `AI_CODE_REVIEW_ANTHROPIC_API_KEY`.
+
 ## Adopting it in a repo
 
 1. Add `.github/workflows/ai-review.yml`:
@@ -37,13 +48,17 @@ Findings about files a PR doesn't change go in the summary and don't block, sinc
        uses: qltysh/.github/.github/workflows/ai-review.yml@main
        with:
          mode: advisory
+         anthropic-federation-rule-id: ${{ vars.AI_CODE_REVIEW_ANTHROPIC_FEDERATION_RULE_ID }}
+         anthropic-organization-id: ${{ vars.AI_CODE_REVIEW_ANTHROPIC_ORGANIZATION_ID }}
+         anthropic-service-account-id: ${{ vars.AI_CODE_REVIEW_ANTHROPIC_SERVICE_ACCOUNT_ID }}
+         anthropic-workspace-id: ${{ vars.AI_CODE_REVIEW_ANTHROPIC_WORKSPACE_ID }}
        secrets:
-         anthropic-api-key: ${{ secrets.AI_REVIEW_ANTHROPIC_API_KEY }}
          slack-webhook-url: ${{ secrets.AI_REVIEW_SLACK_WEBHOOK_URL }}
        permissions:
          contents: read
          pull-requests: write
          statuses: write
+         id-token: write
    ```
 
 2. Add `.github/ai-review.md` with what's specific to the repo: what it is, what matters most, and any severity rules. The review reads it from the base branch, so a PR can't change its own instructions.
@@ -87,12 +102,13 @@ It reviews committed changes on the current branch against `origin/main`, prints
 - The model gets read-only tools (Read, Grep, Glob). It can't run commands, edit files, or reach the network, and it can't read process, git, or runner credential files.
 - Its process gets no GitHub token or webhook URL. Secret-shaped text is redacted before anything is posted.
 - Settings and hooks from the checked-out PR are not loaded. Rules files and the repo's instructions come from the base branch.
+- No long-lived Claude API key is stored. A run's Claude token expires within the hour, and only this workflow on protected main can get one.
 - Claude Code is downloaded at a pinned version and checked against a SHA-256 hash pinned in the workflow.
 - The workflows don't use `pull_request_target`.
 
 ## Cost
 
-About $0.40–1 per review with the default budget cap of $3 a review. Reviews bill to the Console workspace behind `AI_REVIEW_ANTHROPIC_API_KEY`; set a monthly spend limit there.
+About $0.40–1 per review with the default budget cap of $3 a review. Reviews bill to the "AI Code Review" workspace in the Claude Console; its monthly spend limit caps them without affecting other Claude API use.
 
 ## Developing
 
