@@ -1,0 +1,107 @@
+# Reusable gate for Claude Code Review. Claude Code Review posts findings but its check never fails, so this sets the
+# ai-review commit status from its 🔴 Important threads: red while one is open, green once Claude resolves it as fixed
+# or a reviewer other than the author resolves it. Make ai-review a required check to block merges. See
+# ai-review/README.md.
+name: Claude Code Review gate
+
+on:
+  workflow_call:
+    inputs:
+      mode:
+        description: "advisory (never blocks) or blocking (open important findings fail the ai-review status)"
+        type: string
+        default: advisory
+      engine-ref:
+        description: "Ref of qltysh/.github to run the gate from. Match the ref in `uses:`."
+        type: string
+        default: main
+
+permissions: {}
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      checks: read
+      pull-requests: read
+      statuses: write
+    concurrency:
+      group: ai-review-gate-${{ github.repository }}-${{ github.event.pull_request.number || github.event.issue.number || github.event.check_run.head_sha }}
+      cancel-in-progress: true
+    steps:
+      - id: route
+        env:
+          EVENT: ${{ github.event_name }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+          DRAFT: ${{ github.event.pull_request.draft }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          IS_PR_COMMENT: ${{ github.event.issue.pull_request != null }}
+          COMMENTER: ${{ github.event.comment.user.login }}
+          COMMENTER_ASSOCIATION: ${{ github.event.comment.author_association }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          CHECK_NAME: ${{ github.event.check_run.name }}
+          CHECK_SHA: ${{ github.event.check_run.head_sha }}
+        run: |
+          run=false
+          pr=""
+          sha=""
+          claude_comment=""
+          case "$EVENT" in
+            pull_request)
+              # Fork PRs get a read-only token here; Claude Code Review's check_run event sets their status instead.
+              if [ "$DRAFT" != "true" ] && [ "$HEAD_REPO" = "$REPO" ]; then run=true; pr="$PR_NUMBER"; fi
+              ;;
+            pull_request_review|pull_request_review_comment)
+              if [ "$HEAD_REPO" = "$REPO" ]; then run=true; pr="$PR_NUMBER"; fi
+              ;;
+            check_run)
+              if [ "$CHECK_NAME" = "Claude Code Review" ]; then run=true; sha="$CHECK_SHA"; fi
+              ;;
+            issue_comment)
+              if [ "$IS_PR_COMMENT" = "true" ]; then
+                if [ "$COMMENTER" = "claude[bot]" ]; then
+                  # Claude Code Review comments when it skips a PR, for example over its spend limit.
+                  run=true; pr="$PR_NUMBER"; claude_comment="$COMMENT_BODY"
+                elif [[ "$COMMENT_BODY" == /ai-review* ]]; then
+                  case "$COMMENTER_ASSOCIATION" in OWNER|MEMBER|COLLABORATOR) run=true; pr="$PR_NUMBER" ;; esac
+                fi
+              fi
+              ;;
+          esac
+          delimiter="EOF_$(openssl rand -hex 16)"
+          {
+            echo "run=$run"
+            echo "pr=$pr"
+            echo "sha=$sha"
+            echo "claude_comment<<$delimiter"
+            printf '%s\n' "$claude_comment"
+            echo "$delimiter"
+          } >> "$GITHUB_OUTPUT"
+          echo "Gate: run=$run ($EVENT)"
+
+      - name: Check out the gate
+        if: steps.route.outputs.run == 'true'
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          repository: qltysh/.github
+          ref: ${{ inputs.engine-ref }}
+          path: engine
+          persist-credentials: false
+
+      - name: Set up Bun
+        if: steps.route.outputs.run == 'true'
+        uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2
+        with:
+          bun-version: 1.4.4
+
+      - name: Set the ai-review status
+        if: steps.route.outputs.run == 'true'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          AI_REVIEW_MODE: ${{ inputs.mode }}
+          AI_REVIEW_PR: ${{ steps.route.outputs.pr }}
+          AI_REVIEW_SHA: ${{ steps.route.outputs.sha }}
+          AI_REVIEW_CLAUDE_COMMENT: ${{ steps.route.outputs.claude_comment }}
+        run: bun engine/ai-review/src/cli.ts gate-claude

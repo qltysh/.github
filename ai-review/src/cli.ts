@@ -1,12 +1,14 @@
 #!/usr/bin/env bun
 // Entry point. `review` and `gate` run in GitHub Actions; `local` runs the same review on a branch before it's pushed.
 //
-//   bun ai-review/src/cli.ts review | gate | gate-sha | local [--base <ref>]"   review the PR in AI_REVIEW_PR, post findings, set the ai-review status
+//   bun ai-review/src/cli.ts review | gate | gate-sha | gate-claude | local [--base <ref>]"   review the PR in AI_REVIEW_PR, post findings, set the ai-review status
 //   bun ai-review/src/cli.ts gate      recompute the ai-review status from the PR's threads
 //   bun ai-review/src/cli.ts gate-sha  the same, for the open PR whose head is AI_REVIEW_SHA (fork PRs)
+//   bun ai-review/src/cli.ts gate-claude  set the ai-review status from Claude Code Review's findings
 //   bun ai-review/src/cli.ts local [--base <ref>]   review the current branch and print findings
 
 import { BudgetError, runClaude } from "./claude.ts";
+import { CLAUDE_CHECK_NAME, claudeSkipReason, decideClaudeGate, type StatusUpdate } from "./claude_gate.ts";
 import { type AnchoredFinding, formatComment, formatSummary, parseMarker, summaryIds } from "./findings.ts";
 import { evaluateGate, skippedDescription } from "./gate.ts";
 import { GitHub, type ReviewComment, type ThreadDetail } from "./github.ts";
@@ -282,6 +284,42 @@ async function ciGateForSha() {
   if (worst) await gh.setStatus(sha, worst.state, worst.description, runUrl());
 }
 
+/**
+ * Sets the ai-review status from Claude Code Review's findings. Takes the PR in AI_REVIEW_PR, or every open PR whose
+ * head is AI_REVIEW_SHA (a check_run event names only the commit). PRs sharing a commit share its status, so the worst
+ * result wins.
+ */
+async function ciGateClaude() {
+  const cfg = config();
+  const gh = new GitHub(env("GITHUB_TOKEN"), env("GITHUB_REPOSITORY"), process.env.GITHUB_API_URL);
+  const pulls = process.env.AI_REVIEW_PR
+    ? [await gh.getPull(Number(process.env.AI_REVIEW_PR))]
+    : (await gh.listOpenPulls()).filter((p) => p.head.sha === env("AI_REVIEW_SHA"));
+  const open = pulls.filter((p) => p.state === "open" && !p.draft);
+  const sha = open[0]?.head.sha;
+  if (!sha) return console.log("No open, ready PR to gate.");
+
+  const checkRun = await gh.getCheckRun(sha, CLAUDE_CHECK_NAME);
+  const current = await gh.getStatusDetail(sha);
+  const updates: StatusUpdate[] = [];
+  for (const pull of open.filter((p) => p.head.sha === sha)) {
+    const update = decideClaudeGate({
+      threads: await gh.listThreads(pull.number),
+      prAuthor: pull.user.login,
+      mode: cfg.mode,
+      checkRun,
+      skippedReason: claudeSkipReason(process.env.AI_REVIEW_CLAUDE_COMMENT ?? ""),
+      current,
+    });
+    if (update) updates.push(update);
+  }
+  const order = { failure: 0, pending: 1, success: 2 };
+  const worst = updates.sort((a, b) => order[a.state] - order[b.state])[0];
+  if (!worst) return console.log("Leaving the current ai-review status.");
+  await gh.setStatus(sha, worst.state, worst.description, runUrl());
+  console.log(`ai-review status on ${sha.slice(0, 7)}: ${worst.state} (${worst.description})`);
+}
+
 async function sh(args: string[], cwd: string): Promise<string> {
   const proc = Bun.spawn(args, { cwd, stdout: "pipe", stderr: "pipe" });
   const out = await new Response(proc.stdout).text();
@@ -335,9 +373,11 @@ if (import.meta.main) {
         ? ciGate
         : command === "gate-sha"
           ? ciGateForSha
-          : command === "local"
-            ? () => local(rest)
-            : null;
+          : command === "gate-claude"
+            ? ciGateClaude
+            : command === "local"
+              ? () => local(rest)
+              : null;
   if (!run) {
     console.error("Usage: cli.ts review | gate | local [--base <ref>]");
     process.exit(2);

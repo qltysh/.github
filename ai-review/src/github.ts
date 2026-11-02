@@ -161,6 +161,25 @@ export class GitHub {
     });
   }
 
+  /** The latest check run with this name on a commit, or null if there is none. */
+  async getCheckRun(sha: string, name: string): Promise<{ status: string; conclusion: string | null } | null> {
+    const result = (await this.request(
+      "GET",
+      `/repos/${this.repo}/commits/${sha}/check-runs?check_name=${encodeURIComponent(name)}&filter=latest`,
+    )) as { check_runs: { status: string; conclusion: string | null }[] };
+    const run = result.check_runs[0];
+    return run ? { status: run.status, conclusion: run.conclusion } : null;
+  }
+
+  /** The latest ai-review status on a commit, with its description. */
+  async getStatusDetail(sha: string): Promise<{ state: string; description: string } | null> {
+    const result = (await this.request("GET", `/repos/${this.repo}/commits/${sha}/status?per_page=100`)) as {
+      statuses: { context: string; state: string; description: string | null }[];
+    };
+    const status = result.statuses.find((s) => s.context === "ai-review");
+    return status ? { state: status.state, description: status.description ?? "" } : null;
+  }
+
   /** The latest ai-review status on a commit, or null if there is none. */
   async getStatus(sha: string): Promise<string | null> {
     const result = (await this.request("GET", `/repos/${this.repo}/commits/${sha}/status?per_page=100`)) as {

@@ -1,8 +1,51 @@
 # AI review
 
-One AI review runs when a pull request is marked ready for review. It posts important findings as inline threads and lists nits in its summary. In blocking mode, an open important finding fails the `ai-review` commit status until it's fixed, answered, or overridden. Every PR still needs a human approval.
+An AI review of each pull request before a person reviews it. In blocking mode, an open important finding fails the `ai-review` commit status until it's fixed, answered, or overridden. Every PR still needs a human approval.
 
-The prompt, the rules for what blocks, and the code live here, so a change applies to every repo that calls the workflow.
+There are two ways to use it. Repos on Claude Code Review use only the gate here, which turns its 🔴 findings into a merge requirement. Repos that don't use Claude Code Review can run this engine's own reviewer. Either way the workflows live here, so a change applies to every repo that calls them.
+
+## Gating Claude Code Review
+
+Repos that use Claude Code Review, Anthropic's managed reviewer, use only the gate from here. Claude Code Review posts findings inline marked 🔴 Important, 🟡 Nit or 🟣 Pre-existing, and its check never fails. `claude-code-review-gate.yml` sets the `ai-review` status from its 🔴 threads:
+
+- **Waiting:** pending until Claude Code Review has finished on the PR's head commit, so a commit can't pass before it's reviewed. Drafts get no status.
+- **Open 🔴 finding:** fails in blocking mode. Claude resolves the thread itself when a later push fixes it.
+- **Overrides:** a reviewer other than the author resolves the thread, ideally with a reply saying why. An author resolving their own finding doesn't count.
+- **Skipped reviews:** if Claude Code Review skips the PR (its spend limit) or doesn't finish, the status passes, unless 🔴 findings from an earlier review are still open.
+- **Fork PRs:** Claude Code Review only reviews them when a maintainer comments `@claude review`. The gate runs on its check_run event, which carries a write token, so fork PRs get a status too.
+
+Add `.github/workflows/ai-review.yml` to the repo:
+
+```yaml
+name: AI review gate
+on:
+  pull_request:
+    types: [opened, reopened, ready_for_review, synchronize]
+  check_run:
+    types: [completed]
+  pull_request_review:
+    types: [submitted]
+  pull_request_review_comment:
+    types: [created]
+  issue_comment:
+    types: [created]
+permissions: {}
+jobs:
+  gate:
+    uses: qltysh/.github/.github/workflows/claude-code-review-gate.yml@main
+    with:
+      mode: advisory
+    permissions:
+      checks: read
+      pull-requests: read
+      statuses: write
+```
+
+What Claude Code Review flags, and what counts as 🔴, comes from the repo's `REVIEW.md` and `CLAUDE.md`. It reads `REVIEW.md` from the default branch, and honors instructions that lower severity or skip paths only when that branch is protected by a ruleset that dismisses approvals on new pushes or requires approval of the last push. Locally, `/code-review` in Claude Code runs a review of the current branch; it reads `CLAUDE.md` but not `REVIEW.md`.
+
+## Built-in reviewer
+
+The rest of this README covers the engine's own reviewer, for repos that don't use Claude Code Review.
 
 ## How a review goes
 

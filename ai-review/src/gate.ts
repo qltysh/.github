@@ -16,7 +16,14 @@ export type GateInput = {
   botLogin: string;
   prAuthor: string;
   mode: "advisory" | "blocking";
+  /** Whether a thread the bot started is an important finding. Defaults to this engine's own marker. */
+  isImportant?: (thread: ReviewThread) => boolean;
 };
+
+const hasImportantMarker = (thread: ReviewThread) => parseMarker(thread.body)?.severity === "important";
+
+/** Claude Code Review starts each finding with its severity: 🔴 Important, 🟡 Nit, 🟣 Pre-existing. */
+export const isClaudeImportant = (thread: ReviewThread) => thread.body.trimStart().startsWith("🔴");
 
 export type GateResult = {
   state: "success" | "failure";
@@ -29,13 +36,19 @@ export type GateResult = {
  * An important finding stays open until the bot resolves its thread (fixed or answered) or a person other than the
  * PR author resolves it (an override). An author resolving their own finding doesn't count.
  */
-export function evaluateGate({ threads, botLogin, prAuthor, mode }: GateInput): GateResult {
+export function evaluateGate({
+  threads,
+  botLogin,
+  prAuthor,
+  mode,
+  isImportant = hasImportantMarker,
+}: GateInput): GateResult {
   let open = 0;
   const overridden: GateResult["overridden"] = [];
 
   for (const thread of threads) {
     if (thread.author !== botLogin) continue;
-    if (parseMarker(thread.body)?.severity !== "important") continue;
+    if (!isImportant(thread)) continue;
     if (!thread.isResolved || !thread.resolvedBy || thread.resolvedBy === prAuthor) {
       open++;
     } else if (thread.resolvedBy !== botLogin) {
